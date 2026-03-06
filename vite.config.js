@@ -3,5 +3,5 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/',  // ← cambia '/educArte/' por '/'
+  base: '/',  // ← dominio propio = raíz
 })
