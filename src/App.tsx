@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -39,11 +39,9 @@ function AppRoutes() {
 
   return (
     <Routes>
-      {/* Rutas públicas */}
       <Route path="/login" element={!user ? <Login /> : <Navigate to={user.role === 'admin' ? '/dashboard' : '/portal'} />} />
       <Route path="/register" element={!user ? <Register /> : <Navigate to="/portal" />} />
 
-      {/* Rutas privadas */}
       <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
         <Route index element={<Navigate to={user?.role === 'admin' ? '/dashboard' : '/portal'} />} />
         <Route path="dashboard" element={<PrivateRoute roles={['admin']}><Dashboard /></PrivateRoute>} />
@@ -65,11 +63,11 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>  {/* ← ÚNICO CAMBIO: BrowserRouter → HashRouter */}
       <AuthProvider>
         <AppRoutes />
         <Toaster position="top-right" />
       </AuthProvider>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
