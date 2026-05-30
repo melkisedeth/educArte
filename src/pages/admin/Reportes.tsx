@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { Reporte, Alumno } from '../../types';
-import { Plus, Search, X, Loader2, FileText, Edit2, Eye } from 'lucide-react';
+import { Plus, Search, X, Loader2, FileText, Edit2, Eye, Trash2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../firebase';
+
+const CALIFICACIONES = ['Excelente', 'Muy bueno', 'Bueno', 'Regular', 'Necesita mejorar'];
 
 const initialForm = {
   alumnoId: '',
@@ -13,6 +15,15 @@ const initialForm = {
   fortalezas: '',
   areasMejora: '',
   calificacion: '',
+};
+
+const calBadgeColor = (cal: string) => {
+  if (cal === 'Excelente') return 'bg-green-100 text-green-700';
+  if (cal === 'Muy bueno') return 'bg-blue-100 text-blue-700';
+  if (cal === 'Bueno') return 'bg-primary-50 text-primary-700';
+  if (cal === 'Regular') return 'bg-yellow-100 text-yellow-700';
+  if (cal === 'Necesita mejorar') return 'bg-red-100 text-red-700';
+  return 'bg-gray-100 text-gray-600';
 };
 
 export default function Reportes() {
@@ -26,6 +37,8 @@ export default function Reportes() {
   const [editando, setEditando] = useState<Reporte | null>(null);
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<Reporte | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -41,8 +54,13 @@ export default function Reportes() {
         .map(d => ({ id: d.id, ...d.data() } as Alumno)));
       setReportes(reportesSnap.docs
         .filter(d => !d.data().deleted)
-        .map(d => ({ id: d.id, ...d.data() } as Reporte)));
-    } catch (e) {
+        .map(d => ({ id: d.id, ...d.data() } as Reporte))
+        .sort((a, b) => {
+          const fa = (a.createdAt as any)?.toDate?.() || new Date(a.createdAt || 0);
+          const fb = (b.createdAt as any)?.toDate?.() || new Date(b.createdAt || 0);
+          return fb.getTime() - fa.getTime();
+        }));
+    } catch {
       toast.error('Error cargando reportes');
     } finally {
       setLoading(false);
@@ -55,11 +73,11 @@ export default function Reportes() {
       setForm({
         alumnoId: reporte.alumnoId,
         periodo: reporte.periodo,
-        materias: reporte.materias,
+        materias: reporte.materias || '',
         desempeno: reporte.desempeno,
-        fortalezas: reporte.fortalezas,
-        areasMejora: reporte.areasMejora,
-        calificacion: reporte.calificacion,
+        fortalezas: reporte.fortalezas || '',
+        areasMejora: reporte.areasMejora || '',
+        calificacion: reporte.calificacion || '',
       });
     } else {
       setEditando(null);
@@ -95,15 +113,35 @@ export default function Reportes() {
       }
       closeModal();
       fetchData();
-    } catch (e) {
+    } catch {
       toast.error('Error guardando reporte');
     } finally {
       setSaving(false);
     }
   };
 
+  const handleDelete = async (reporte: Reporte) => {
+    setDeleting(true);
+    try {
+      await updateDoc(doc(db, 'educarte_reportes', reporte.id), { deleted: true });
+      toast.success('Reporte eliminado');
+      setConfirmDelete(null);
+      fetchData();
+    } catch {
+      toast.error('Error eliminando reporte');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const getNombreAlumno = (id: string) =>
     alumnos.find(a => a.id === id)?.nombre || 'Desconocido';
+
+  const formatFecha = (fecha: any) => {
+    if (!fecha) return '—';
+    if (fecha?.toDate) return fecha.toDate().toLocaleDateString('es-ES');
+    return new Date(fecha).toLocaleDateString('es-ES');
+  };
 
   const filtrados = reportes.filter(r => {
     const nombre = getNombreAlumno(r.alumnoId).toLowerCase();
@@ -112,12 +150,6 @@ export default function Reportes() {
     const matchAlumno = filtroAlumno === 'todos' || r.alumnoId === filtroAlumno;
     return matchSearch && matchAlumno;
   });
-
-  const formatFecha = (fecha: any) => {
-    if (!fecha) return '—';
-    if (fecha?.toDate) return fecha.toDate().toLocaleDateString('es-ES');
-    return new Date(fecha).toLocaleDateString('es-ES');
-  };
 
   return (
     <div className="space-y-5">
@@ -188,24 +220,32 @@ export default function Reportes() {
                   <tr key={reporte.id} className="hover:bg-gray-50 transition">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
+                        <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center shrink-0">
                           <span className="text-indigo-600 font-semibold text-xs">
-                            {getNombreAlumno(reporte.alumnoId).charAt(0)}
+                            {getNombreAlumno(reporte.alumnoId).charAt(0).toUpperCase()}
                           </span>
                         </div>
-                        <span className="font-medium text-gray-800">{getNombreAlumno(reporte.alumnoId)}</span>
+                        <span className="font-medium text-gray-800">
+                          {getNombreAlumno(reporte.alumnoId)}
+                        </span>
                       </div>
                     </td>
                     <td className="px-5 py-3 text-gray-600">{reporte.periodo}</td>
-                    <td className="px-5 py-3 text-gray-600 max-w-[180px] truncate">{reporte.materias}</td>
-                    <td className="px-5 py-3">
-                      <span className="inline-block bg-primary-50 text-primary-700 text-xs font-semibold px-2.5 py-1 rounded-full">
-                        {reporte.calificacion || '—'}
-                      </span>
+                    <td className="px-5 py-3 text-gray-500 max-w-[160px] truncate">
+                      {reporte.materias || <span className="italic text-gray-300">—</span>}
                     </td>
-                    <td className="px-5 py-3 text-gray-500 text-xs">{formatFecha(reporte.createdAt)}</td>
                     <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-2">
+                      {reporte.calificacion ? (
+                        <span className={`inline-block text-xs font-semibold px-2.5 py-1 rounded-full ${calBadgeColor(reporte.calificacion)}`}>
+                          {reporte.calificacion}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-gray-400 text-xs">{formatFecha(reporte.createdAt)}</td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => setVerDetalle(reporte)}
                           className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
@@ -219,6 +259,13 @@ export default function Reportes() {
                           title="Editar"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(reporte)}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                          title="Eliminar"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -265,7 +312,7 @@ export default function Reportes() {
                     value={form.periodo}
                     onChange={e => setForm({ ...form, periodo: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="Ej: Enero - Marzo 2026"
+                    placeholder="Ej: Enero – Marzo 2026"
                     required
                   />
                 </div>
@@ -279,29 +326,32 @@ export default function Reportes() {
                     value={form.materias}
                     onChange={e => setForm({ ...form, materias: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="Ej: Matemáticas, Español"
+                    placeholder="Ej: Matemáticas, Lectura, Arte"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Calificación</label>
-                  <input
-                    type="text"
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Calificación general</label>
+                  <select
                     value={form.calificacion}
                     onChange={e => setForm({ ...form, calificacion: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                    placeholder="Ej: Excelente / 9.5"
-                  />
+                  >
+                    <option value="">Sin calificación</option>
+                    {CALIFICACIONES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Descripción del desempeño *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Descripción del desempeño *
+                </label>
                 <textarea
                   value={form.desempeno}
                   onChange={e => setForm({ ...form, desempeno: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
                   rows={3}
-                  placeholder="Describe el desempeño general del alumno..."
+                  placeholder="Describe el desempeño general del alumno en el período..."
                   required
                 />
               </div>
@@ -314,7 +364,7 @@ export default function Reportes() {
                     onChange={e => setForm({ ...form, fortalezas: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
                     rows={3}
-                    placeholder="Puntos fuertes del alumno..."
+                    placeholder="Aspectos positivos destacados..."
                   />
                 </div>
                 <div>
@@ -324,24 +374,18 @@ export default function Reportes() {
                     onChange={e => setForm({ ...form, areasMejora: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
                     rows={3}
-                    placeholder="Aspectos a mejorar..."
+                    placeholder="Aspectos a trabajar en el siguiente período..."
                   />
                 </div>
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition"
-                >
+                <button type="button" onClick={closeModal}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition">
                   Cancelar
                 </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-primary-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                >
+                <button type="submit" disabled={saving}
+                  className="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-primary-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
                   {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Guardando...</> : 'Guardar'}
                 </button>
               </div>
@@ -355,7 +399,7 @@ export default function Reportes() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-800">Detalle del Reporte</h2>
+              <h2 className="text-lg font-semibold text-gray-800">Reporte Académico</h2>
               <button onClick={() => setVerDetalle(null)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
@@ -364,49 +408,103 @@ export default function Reportes() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs text-gray-400 uppercase tracking-wide">Alumno</p>
-                  <p className="font-semibold text-gray-800 text-lg">{getNombreAlumno(verDetalle.alumnoId)}</p>
+                  <p className="font-bold text-gray-800 text-lg">{getNombreAlumno(verDetalle.alumnoId)}</p>
                 </div>
-                <span className="bg-primary-50 text-primary-700 font-semibold px-3 py-1 rounded-full text-sm">
-                  {verDetalle.calificacion || 'Sin calificación'}
-                </span>
+                {verDetalle.calificacion && (
+                  <span className={`font-bold px-3 py-1.5 rounded-full text-sm ${calBadgeColor(verDetalle.calificacion)}`}>
+                    {verDetalle.calificacion}
+                  </span>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-gray-400 text-xs uppercase tracking-wide">Período</p>
-                  <p className="text-gray-800 font-medium">{verDetalle.periodo}</p>
+                  <p className="font-medium text-gray-800 mt-0.5">{verDetalle.periodo}</p>
                 </div>
                 <div>
                   <p className="text-gray-400 text-xs uppercase tracking-wide">Materias</p>
-                  <p className="text-gray-800 font-medium">{verDetalle.materias || '—'}</p>
+                  <p className="font-medium text-gray-800 mt-0.5">{verDetalle.materias || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400 text-xs uppercase tracking-wide">Fecha</p>
+                  <p className="font-medium text-gray-800 mt-0.5">{formatFecha(verDetalle.createdAt)}</p>
                 </div>
               </div>
 
               <div>
                 <p className="text-gray-400 text-xs uppercase tracking-wide mb-1">Desempeño</p>
-                <p className="text-gray-700 text-sm bg-gray-50 rounded-lg p-3">{verDetalle.desempeno}</p>
+                <p className="text-gray-700 text-sm bg-gray-50 rounded-lg p-3 leading-relaxed">
+                  {verDetalle.desempeno}
+                </p>
               </div>
 
               {verDetalle.fortalezas && (
                 <div>
                   <p className="text-gray-400 text-xs uppercase tracking-wide mb-1">Fortalezas</p>
-                  <p className="text-gray-700 text-sm bg-green-50 rounded-lg p-3">{verDetalle.fortalezas}</p>
+                  <p className="text-gray-700 text-sm bg-green-50 rounded-lg p-3 leading-relaxed">
+                    {verDetalle.fortalezas}
+                  </p>
                 </div>
               )}
 
               {verDetalle.areasMejora && (
                 <div>
                   <p className="text-gray-400 text-xs uppercase tracking-wide mb-1">Áreas de mejora</p>
-                  <p className="text-gray-700 text-sm bg-yellow-50 rounded-lg p-3">{verDetalle.areasMejora}</p>
+                  <p className="text-gray-700 text-sm bg-yellow-50 rounded-lg p-3 leading-relaxed">
+                    {verDetalle.areasMejora}
+                  </p>
                 </div>
               )}
 
-              <div className="text-right">
+              <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+                <button
+                  onClick={() => { setVerDetalle(null); setConfirmDelete(verDetalle); }}
+                  className="flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 font-medium"
+                >
+                  <Trash2 className="w-4 h-4" /> Eliminar
+                </button>
                 <button
                   onClick={() => { setVerDetalle(null); openModal(verDetalle); }}
-                  className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                  className="flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
                 >
-                  Editar reporte
+                  <Edit2 className="w-4 h-4" /> Editar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmar Eliminación */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="px-6 py-5">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-800">Eliminar reporte</h2>
+                  <p className="text-sm text-gray-500">Esta acción no se puede deshacer</p>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg px-4 py-3 mb-5">
+                <p className="font-medium text-gray-800">{getNombreAlumno(confirmDelete.alumnoId)}</p>
+                <p className="text-sm text-gray-500">{confirmDelete.periodo}</p>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setConfirmDelete(null)}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition"
+                  disabled={deleting}>
+                  Cancelar
+                </button>
+                <button onClick={() => handleDelete(confirmDelete)} disabled={deleting}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
+                  {deleting ? <><Loader2 className="w-4 h-4 animate-spin" /> Eliminando...</> : <><Trash2 className="w-4 h-4" /> Eliminar</>}
                 </button>
               </div>
             </div>

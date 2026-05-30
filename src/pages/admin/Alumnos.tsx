@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { Alumno, Pago } from '../../types';
-import { Plus, Search, Edit2, UserX, UserCheck, X, Loader2 } from 'lucide-react';
+import { Plus, Search, Edit2, UserX, UserCheck, X, Loader2, Trash2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db } from '../../../firebase';
 
@@ -27,6 +27,8 @@ export default function Alumnos() {
   const [editando, setEditando] = useState<Alumno | null>(null);
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<Alumno | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => { fetchAlumnos(); }, []);
 
@@ -34,10 +36,12 @@ export default function Alumnos() {
     setLoading(true);
     try {
       const snap = await getDocs(collection(db, 'educarte_alumnos'));
-      setAlumnos(snap.docs
-        .filter(d => !d.data().deleted)
-        .map(d => ({ id: d.id, ...d.data() } as Alumno)));
-    } catch (e) {
+      setAlumnos(
+        snap.docs
+          .filter(d => !d.data().deleted)
+          .map(d => ({ id: d.id, ...d.data() } as Alumno))
+      );
+    } catch {
       toast.error('Error cargando alumnos');
     } finally {
       setLoading(false);
@@ -81,7 +85,6 @@ export default function Alumnos() {
         await updateDoc(doc(db, 'educarte_alumnos', editando.id), { ...form });
         toast.success('Alumno actualizado');
       } else {
-        // Crear alumno
         const docRef = await addDoc(collection(db, 'educarte_alumnos'), {
           ...form,
           padresIds: [],
@@ -93,13 +96,13 @@ export default function Alumnos() {
         const fechaIngreso = new Date(form.fechaIngreso + 'T12:00:00');
         const hoy = new Date();
         const mesActual = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-
         let cursor = new Date(fechaIngreso.getFullYear(), fechaIngreso.getMonth(), 1);
-        const cobrosGenerados: number[] = [];
+        let count = 0;
 
         while (cursor <= mesActual) {
           const mes = cursor.toISOString().slice(0, 7);
-          const fechaVencimiento = new Date(cursor.getFullYear(), cursor.getMonth(), form.diaCicloPago);
+          const [anio, mesNum] = mes.split('-').map(Number);
+          const fechaVencimiento = new Date(anio, mesNum - 1, form.diaCicloPago);
           const estado: Pago['estado'] = hoy > fechaVencimiento ? 'vencido' : 'pendiente';
 
           await addDoc(collection(db, 'educarte_pagos'), {
@@ -112,12 +115,11 @@ export default function Alumnos() {
             deleted: false,
             createdAt: new Date(),
           });
-
-          cobrosGenerados.push(cursor.getMonth());
+          count++;
           cursor.setMonth(cursor.getMonth() + 1);
         }
 
-        toast.success(`Alumno registrado con ${cobrosGenerados.length} cobro(s) generado(s)`);
+        toast.success(`Alumno registrado con ${count} cobro(s) generado(s)`);
       }
       closeModal();
       fetchAlumnos();
@@ -128,14 +130,43 @@ export default function Alumnos() {
       setSaving(false);
     }
   };
+
   const toggleEstado = async (alumno: Alumno) => {
     try {
       const nuevoEstado = alumno.estado === 'activo' ? 'inactivo' : 'activo';
       await updateDoc(doc(db, 'educarte_alumnos', alumno.id), { estado: nuevoEstado });
       toast.success(`Alumno ${nuevoEstado === 'activo' ? 'activado' : 'desactivado'}`);
       fetchAlumnos();
-    } catch (e) {
+    } catch {
       toast.error('Error actualizando estado');
+    }
+  };
+
+  // Eliminar alumno y todos sus pagos/asistencias relacionadas
+  const handleDelete = async (alumno: Alumno) => {
+    setDeleting(true);
+    try {
+      // Soft-delete del alumno
+      await updateDoc(doc(db, 'educarte_alumnos', alumno.id), { deleted: true });
+
+      // Soft-delete de todos los pagos del alumno
+      const pagosSnap = await getDocs(collection(db, 'educarte_pagos'));
+      const pagosDel = pagosSnap.docs.filter(d => d.data().alumnoId === alumno.id && !d.data().deleted);
+      await Promise.all(pagosDel.map(d => updateDoc(doc(db, 'educarte_pagos', d.id), { deleted: true })));
+
+      // Soft-delete de asistencias
+      const asistSnap = await getDocs(collection(db, 'educarte_asistencia'));
+      const asistDel = asistSnap.docs.filter(d => d.data().alumnoId === alumno.id);
+      await Promise.all(asistDel.map(d => deleteDoc(doc(db, 'educarte_asistencia', d.id))));
+
+      toast.success(`Alumno "${alumno.nombre}" eliminado`);
+      setConfirmDelete(null);
+      fetchAlumnos();
+    } catch (e) {
+      toast.error('Error eliminando alumno');
+      console.error(e);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -152,7 +183,7 @@ export default function Alumnos() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Alumnos</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{alumnos.filter(a => a.estado === 'activo').length} activos</p>
+          <p className="text-sm text-gray-500 mt-0.5">{alumnos.filter(a => a.estado === 'activo').length} activos · {alumnos.length} total</p>
         </div>
         <button
           onClick={() => openModal()}
@@ -211,8 +242,8 @@ export default function Alumnos() {
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="text-left px-5 py-3 font-medium text-gray-600">Nombre</th>
-                  <th className="text-left px-5 py-3 font-medium text-gray-600">Grado</th>
                   <th className="text-left px-5 py-3 font-medium text-gray-600">Ingreso</th>
+                  <th className="text-left px-5 py-3 font-medium text-gray-600">Día pago</th>
                   <th className="text-left px-5 py-3 font-medium text-gray-600">Monto</th>
                   <th className="text-left px-5 py-3 font-medium text-gray-600">Estado</th>
                   <th className="text-right px-5 py-3 font-medium text-gray-600">Acciones</th>
@@ -223,28 +254,26 @@ export default function Alumnos() {
                   <tr key={alumno.id} className="hover:bg-gray-50 transition">
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
+                        <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center shrink-0">
                           <span className="text-primary-600 font-semibold text-xs">
-                            {alumno.nombre.charAt(0)}
+                            {alumno.nombre.charAt(0).toUpperCase()}
                           </span>
                         </div>
                         <span className="font-medium text-gray-800">{alumno.nombre}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-gray-600">{alumno.grado}</td>
                     <td className="px-5 py-3 text-gray-600">{alumno.fechaIngreso}</td>
-                    <td className="px-5 py-3 text-gray-600">${alumno.montoPago?.toLocaleString()}</td>
+                    <td className="px-5 py-3 text-gray-600">Día {alumno.diaCicloPago}</td>
+                    <td className="px-5 py-3 text-gray-700 font-medium">${alumno.montoPago?.toLocaleString()}</td>
                     <td className="px-5 py-3">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        alumno.estado === 'activo'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-600'
+                        alumno.estado === 'activo' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
                       }`}>
                         {alumno.estado === 'activo' ? 'Activo' : 'Inactivo'}
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={() => openModal(alumno)}
                           className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition"
@@ -256,12 +285,19 @@ export default function Alumnos() {
                           onClick={() => toggleEstado(alumno)}
                           className={`p-1.5 rounded-lg transition ${
                             alumno.estado === 'activo'
-                              ? 'text-gray-400 hover:text-red-500 hover:bg-red-50'
+                              ? 'text-gray-400 hover:text-orange-500 hover:bg-orange-50'
                               : 'text-gray-400 hover:text-green-500 hover:bg-green-50'
                           }`}
                           title={alumno.estado === 'activo' ? 'Desactivar' : 'Activar'}
                         >
                           {alumno.estado === 'activo' ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDelete(alumno)}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                          title="Eliminar alumno"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -273,7 +309,7 @@ export default function Alumnos() {
         )}
       </div>
 
-      {/* Modal */}
+      {/* Modal Crear/Editar */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -361,7 +397,10 @@ export default function Alumnos() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Día de pago</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Día de vencimiento
+                    <span className="text-gray-400 font-normal ml-1">(1–28)</span>
+                  </label>
                   <input
                     type="number"
                     value={form.diaCicloPago}
@@ -370,26 +409,72 @@ export default function Alumnos() {
                     min={1}
                     max={28}
                   />
+                  <p className="text-xs text-gray-400 mt-1">El pago vence este día cada mes</p>
                 </div>
               </div>
 
+              {!editando && (
+                <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm text-blue-700">
+                  Se generarán cobros retroactivos desde la fecha de ingreso hasta el mes actual.
+                </div>
+              )}
+
               <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition"
-                >
+                <button type="button" onClick={closeModal}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition">
                   Cancelar
                 </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-primary-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                >
+                <button type="submit" disabled={saving}
+                  className="px-4 py-2 bg-primary-500 hover:bg-primary-600 disabled:bg-primary-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2">
                   {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Guardando...</> : 'Guardar'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmar Eliminación */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="px-6 py-5">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-800">Eliminar alumno</h2>
+                  <p className="text-sm text-gray-500">Esta acción no se puede deshacer</p>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg px-4 py-3 mb-4">
+                <p className="font-medium text-gray-800">{confirmDelete.nombre}</p>
+                <p className="text-sm text-gray-500">{confirmDelete.grado} · ${confirmDelete.montoPago?.toLocaleString()}/mes</p>
+              </div>
+
+              <p className="text-sm text-gray-600 mb-5">
+                Se eliminarán todos los registros de pagos y asistencias asociados a este alumno.
+              </p>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setConfirmDelete(null)}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 transition"
+                  disabled={deleting}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => handleDelete(confirmDelete)}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                >
+                  {deleting ? <><Loader2 className="w-4 h-4 animate-spin" /> Eliminando...</> : <><Trash2 className="w-4 h-4" /> Eliminar</>}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
